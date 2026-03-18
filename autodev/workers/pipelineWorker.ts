@@ -5,9 +5,9 @@ import { execSync } from "node:child_process";
 import { PIPELINE } from "../pipeline.js";
 import { connection } from "../queue.js";
 import { resolveAutodevPath } from "../runtime.js";
-import { enqueueRunnableTickets, getTicketById, reconcileRuntimeState, setRuntimeTicketState, touchRuntimeTicket } from "../tickets.js";
-import type { ReviewResult, Ticket } from "../types.js";
-import { AgentExecutionError, buildImplementPrompt, buildRepairPrompt, buildTestFailurePrompt, parseReviewResult, runImplementAgent, runReviewAgent } from "../utils/agent.js";
+import { enqueueRunnableTickets, getRuntimeTicketState, getTicketById, reconcileRuntimeState, setRuntimeTicketState, touchRuntimeTicket } from "../tickets.js";
+import type { ReviewResult, RuntimeTicketState, Ticket } from "../types.js";
+import { AgentExecutionError, buildImplementPrompt, buildRepairPrompt, buildResumeImplementPrompt, buildTestFailurePrompt, parseReviewResult, runImplementAgent, runReviewAgent } from "../utils/agent.js";
 import { loadContext, selectRelevantFiles } from "../utils/context.js";
 import { commitTicket, hasChanges, workingTreeDiff, workingTreeStatus } from "../utils/git.js";
 import { logger } from "../utils/logger.js";
@@ -29,6 +29,43 @@ function writeArtifact(runDir: string, name: string, content: string) {
 function writeAgentFailureArtifacts(runDir: string, error: AgentExecutionError) {
   writeArtifact(runDir, "agent-failure-stderr.txt", error.stderr);
   writeArtifact(runDir, "agent-failure-stdout.txt", error.stdout);
+}
+
+function isTerminalError(message: string) {
+  return [
+    "Exceeded maximum agent attempts",
+    "Review rejected changes after",
+    "Tests failed after",
+    "Pipeline reached approval with no file changes",
+  ].some((prefix) => message.includes(prefix));
+}
+
+function resumePromptFromRuntime(ticket: Ticket, runtimeTicket: RuntimeTicketState | null, context: string) {
+  if (!runtimeTicket) {
+    return buildImplementPrompt(ticket, context);
+  }
+
+  if (runtimeTicket.pendingReviewSummary || runtimeTicket.pendingReviewIssues?.length) {
+    return buildRepairPrompt(ticket, {
+      status: "changes_required",
+      summary: runtimeTicket.pendingReviewSummary ?? "Address the stored review feedback.",
+      issues: runtimeTicket.pendingReviewIssues ?? [],
+    });
+  }
+
+  if (runtimeTicket.pendingTestOutputPath && fs.existsSync(runtimeTicket.pendingTestOutputPath)) {
+    return buildTestFailurePrompt(ticket, fs.readFileSync(runtimeTicket.pendingTestOutputPath, "utf8"));
+  }
+
+  if (runtimeTicket.stage === "implementing" || runtimeTicket.stage === "queued") {
+    return buildResumeImplementPrompt(ticket, context, runtimeTicket.lastError);
+  }
+
+  return buildImplementPrompt(ticket, context);
+}
+
+function persistProgress(ticketId: string, state: Omit<RuntimeTicketState, "updatedAt">) {
+  setRuntimeTicketState(ticketId, state);
 }
 
 // Runs the configured test command with a hard timeout and distinguishes
@@ -64,11 +101,14 @@ function runTests(cwd: string) {
   }
 }
 
-function blockTicket(ticketId: string, message: string, branch?: string, commitSha?: string) {
+function blockTicket(ticketId: string, message: string, branch?: string, commitSha?: string, worktreePath?: string, baseSha?: string, runDir?: string) {
   setRuntimeTicketState(ticketId, {
     status: "blocked",
     stage: "blocked",
     lastError: message,
+    runDir,
+    worktreePath,
+    baseSha,
     branch,
     commitSha,
   });
@@ -94,125 +134,231 @@ function captureFailureArtifacts(runDir: string, worktreePath: string) {
 // retrieve context, implement, review, test, commit, integrate, and clean up.
 async function processTicket(ticket: Ticket) {
   const ticketLogger = logger.child({ ticketId: ticket.id, title: ticket.title });
-  const runDir = ensureRunDir(ticket.id);
-  const worktree = createTicketWorktree(ticket.id);
+  const runtimeTicket = getRuntimeTicketState(ticket.id);
+  const runDir = runtimeTicket?.runDir ?? ensureRunDir(ticket.id);
+  const worktree = runtimeTicket?.worktreePath && runtimeTicket.branch && runtimeTicket.baseSha && fs.existsSync(runtimeTicket.worktreePath)
+    ? { path: runtimeTicket.worktreePath, branch: runtimeTicket.branch, baseSha: runtimeTicket.baseSha }
+    : createTicketWorktree(ticket.id);
 
-  ticketLogger.info("Created isolated ticket worktree", {
-    branch: worktree.branch,
+  if (runtimeTicket?.worktreePath && runtimeTicket.branch && runtimeTicket.baseSha && fs.existsSync(runtimeTicket.worktreePath)) {
+    ticketLogger.info("Resuming existing ticket worktree", {
+      branch: worktree.branch,
+      worktreePath: worktree.path,
+      baseSha: worktree.baseSha,
+      runDir,
+      stage: runtimeTicket.stage,
+      attempt: runtimeTicket.attempt,
+    });
+  } else {
+    ticketLogger.info("Created isolated ticket worktree", {
+      branch: worktree.branch,
+      worktreePath: worktree.path,
+      baseSha: worktree.baseSha,
+      runDir,
+    });
+  }
+
+  persistProgress(ticket.id, {
+    status: "in_progress",
+    stage: runtimeTicket?.stage ?? "queued",
+    attempt: runtimeTicket?.attempt ?? 0,
+    reviewRounds: runtimeTicket?.reviewRounds ?? 0,
+    testFixRounds: runtimeTicket?.testFixRounds ?? 0,
+    runDir,
     worktreePath: worktree.path,
     baseSha: worktree.baseSha,
-    runDir,
-  });
-
-  setRuntimeTicketState(ticket.id, {
-    status: "in_progress",
-    stage: "queued",
-    attempt: 0,
-    runDir,
     branch: worktree.branch,
+    commitSha: runtimeTicket?.commitSha,
+    lastError: runtimeTicket?.lastError,
+    pendingReviewSummary: runtimeTicket?.pendingReviewSummary,
+    pendingReviewIssues: runtimeTicket?.pendingReviewIssues,
+    pendingTestOutputPath: runtimeTicket?.pendingTestOutputPath,
   });
 
-  let commitSha: string | undefined;
+  let commitSha: string | undefined = runtimeTicket?.commitSha;
 
   try {
     const retrievalPlan = selectRelevantFiles(ticket);
     const context = loadContext(worktree.path, ticket, retrievalPlan);
-    let nextPrompt = buildImplementPrompt(ticket, context);
-    let reviewRounds = 0;
-    let testFixRounds = 0;
-    let attempts = 0;
+    let nextPrompt = resumePromptFromRuntime(ticket, runtimeTicket, context);
+    let reviewRounds = runtimeTicket?.reviewRounds ?? 0;
+    let testFixRounds = runtimeTicket?.testFixRounds ?? 0;
+    let attempts = runtimeTicket?.attempt ?? 0;
+    let stage = runtimeTicket?.stage ?? "implementing";
+
+    if (stage === "reviewing" || stage === "testing" || stage === "committing" || stage === "cleanup") {
+      ticketLogger.info("Resuming ticket from persisted stage", { stage, attempt: attempts });
+    }
+
+    if (stage === "cleanup" && commitSha) {
+      removeTicketWorktree(worktree.path);
+      deleteTicketBranch(worktree.branch);
+      persistProgress(ticket.id, {
+        status: "done",
+        stage: "done",
+        attempt: attempts,
+        reviewRounds,
+        testFixRounds,
+        runDir,
+        worktreePath: worktree.path,
+        baseSha: worktree.baseSha,
+        branch: worktree.branch,
+        commitSha,
+      });
+      return;
+    }
 
     while (attempts < PIPELINE.maxAgentAttempts) {
-      attempts += 1;
-      touchRuntimeTicket(ticket.id);
-      setRuntimeTicketState(ticket.id, {
-        status: "in_progress",
-        stage: "implementing",
-        attempt: attempts,
-        runDir,
-        branch: worktree.branch,
-        commitSha,
-      });
-      ticketLogger.info("Starting implementation attempt", { attempt: attempts });
-      const implementOutput = await runImplementAgent(ticket.id, worktree.path, nextPrompt, runDir, attempts, () => touchRuntimeTicket(ticket.id));
-      writeArtifact(runDir, `implement-${attempts}.txt`, implementOutput);
-      ticketLogger.info("Implementation attempt completed", {
-        attempt: attempts,
-        artifactPath: path.join(runDir, `implement-${attempts}.txt`),
-      });
-
-      touchRuntimeTicket(ticket.id);
-      setRuntimeTicketState(ticket.id, {
-        status: "in_progress",
-        stage: "reviewing",
-        attempt: attempts,
-        runDir,
-        branch: worktree.branch,
-        commitSha,
-      });
-      const reviewOutput = await runReviewAgent(worktree.path, ticket, runDir, attempts, () => touchRuntimeTicket(ticket.id));
-      writeArtifact(runDir, `review-${attempts}.txt`, reviewOutput);
-      ticketLogger.info("Review completed", {
-        attempt: attempts,
-        artifactPath: path.join(runDir, `review-${attempts}.txt`),
-      });
-
-      const review = parseReviewResult(reviewOutput);
-
-      if (review.status === "changes_required") {
-        ticketLogger.warn("Review requested changes", {
+      if (stage === "queued" || stage === "implementing") {
+        attempts += 1;
+        touchRuntimeTicket(ticket.id);
+        persistProgress(ticket.id, {
+          status: "in_progress",
+          stage: "implementing",
           attempt: attempts,
-          reviewSummary: review.summary,
-          issues: review.issues,
+          reviewRounds,
+          testFixRounds,
+          runDir,
+          worktreePath: worktree.path,
+          baseSha: worktree.baseSha,
+          branch: worktree.branch,
+          commitSha,
+          pendingReviewSummary: undefined,
+          pendingReviewIssues: undefined,
+          pendingTestOutputPath: undefined,
         });
-        reviewRounds += 1;
-
-        if (reviewRounds > PIPELINE.maxReviewRounds) {
-          throw new Error(`Review rejected changes after ${PIPELINE.maxReviewRounds} rounds: ${formatReviewIssues(review)}`);
-        }
-
-        nextPrompt = buildRepairPrompt(ticket, review);
-        continue;
+        ticketLogger.info("Starting implementation attempt", { attempt: attempts });
+        const implementOutput = await runImplementAgent(ticket.id, worktree.path, nextPrompt, runDir, attempts, () => touchRuntimeTicket(ticket.id));
+        writeArtifact(runDir, `implement-${attempts}.txt`, implementOutput);
+        ticketLogger.info("Implementation attempt completed", {
+          attempt: attempts,
+          artifactPath: path.join(runDir, `implement-${attempts}.txt`),
+        });
+        stage = "reviewing";
       }
 
-      setRuntimeTicketState(ticket.id, {
-        status: "in_progress",
-        stage: "testing",
-        attempt: attempts,
-        runDir,
-        branch: worktree.branch,
-        commitSha,
-      });
-      const testResult = runTests(worktree.path);
-      touchRuntimeTicket(ticket.id);
-      writeArtifact(runDir, `test-${attempts}.txt`, testResult.output);
-      ticketLogger.info("Test command completed", {
-        attempt: attempts,
-        ok: testResult.ok,
-        artifactPath: path.join(runDir, `test-${attempts}.txt`),
-      });
+      if (stage === "reviewing") {
+        touchRuntimeTicket(ticket.id);
+        persistProgress(ticket.id, {
+          status: "in_progress",
+          stage: "reviewing",
+          attempt: attempts,
+          reviewRounds,
+          testFixRounds,
+          runDir,
+          worktreePath: worktree.path,
+          baseSha: worktree.baseSha,
+          branch: worktree.branch,
+          commitSha,
+        });
+        const reviewOutput = await runReviewAgent(worktree.path, ticket, runDir, attempts, () => touchRuntimeTicket(ticket.id));
+        writeArtifact(runDir, `review-${attempts}.txt`, reviewOutput);
+        ticketLogger.info("Review completed", {
+          attempt: attempts,
+          artifactPath: path.join(runDir, `review-${attempts}.txt`),
+        });
 
-      if (!testResult.ok) {
-        ticketLogger.warn("Tests failed; requesting repair", { attempt: attempts });
-        testFixRounds += 1;
+        const review = parseReviewResult(reviewOutput);
 
-        if (testFixRounds > PIPELINE.maxTestFixRounds) {
-          throw new Error(`Tests failed after ${PIPELINE.maxTestFixRounds} repair rounds`);
+        if (review.status === "changes_required") {
+          ticketLogger.warn("Review requested changes", {
+            attempt: attempts,
+            reviewSummary: review.summary,
+            issues: review.issues,
+          });
+          reviewRounds += 1;
+
+          if (reviewRounds > PIPELINE.maxReviewRounds) {
+            throw new Error(`Review rejected changes after ${PIPELINE.maxReviewRounds} rounds: ${formatReviewIssues(review)}`);
+          }
+
+          nextPrompt = buildRepairPrompt(ticket, review);
+          persistProgress(ticket.id, {
+            status: "in_progress",
+            stage: "implementing",
+            attempt: attempts,
+            reviewRounds,
+            testFixRounds,
+            runDir,
+            worktreePath: worktree.path,
+            baseSha: worktree.baseSha,
+            branch: worktree.branch,
+            commitSha,
+            pendingReviewSummary: review.summary,
+            pendingReviewIssues: review.issues,
+          });
+          stage = "implementing";
+          continue;
         }
 
-        nextPrompt = buildTestFailurePrompt(ticket, testResult.output);
-        continue;
+        persistProgress(ticket.id, {
+          status: "in_progress",
+          stage: "testing",
+          attempt: attempts,
+          reviewRounds,
+          testFixRounds,
+          runDir,
+          worktreePath: worktree.path,
+          baseSha: worktree.baseSha,
+          branch: worktree.branch,
+          commitSha,
+          pendingReviewSummary: undefined,
+          pendingReviewIssues: undefined,
+        });
+        stage = "testing";
+      }
+
+      if (stage === "testing") {
+        const testResult = runTests(worktree.path);
+        touchRuntimeTicket(ticket.id);
+        const testOutputPath = path.join(runDir, `test-${attempts}.txt`);
+        writeArtifact(runDir, `test-${attempts}.txt`, testResult.output);
+        ticketLogger.info("Test command completed", {
+          attempt: attempts,
+          ok: testResult.ok,
+          artifactPath: testOutputPath,
+        });
+
+        if (!testResult.ok) {
+          ticketLogger.warn("Tests failed; requesting repair", { attempt: attempts });
+          testFixRounds += 1;
+
+          if (testFixRounds > PIPELINE.maxTestFixRounds) {
+            throw new Error(`Tests failed after ${PIPELINE.maxTestFixRounds} repair rounds`);
+          }
+
+          nextPrompt = buildTestFailurePrompt(ticket, testResult.output);
+          persistProgress(ticket.id, {
+            status: "in_progress",
+            stage: "implementing",
+            attempt: attempts,
+            reviewRounds,
+            testFixRounds,
+            runDir,
+            worktreePath: worktree.path,
+            baseSha: worktree.baseSha,
+            branch: worktree.branch,
+            commitSha,
+            pendingTestOutputPath: testOutputPath,
+          });
+          stage = "implementing";
+          continue;
+        }
       }
 
       if (!hasChanges(worktree.path)) {
         throw new Error("Pipeline reached approval with no file changes in isolated worktree");
       }
 
-      setRuntimeTicketState(ticket.id, {
+      persistProgress(ticket.id, {
         status: "in_progress",
         stage: "committing",
         attempt: attempts,
+        reviewRounds,
+        testFixRounds,
         runDir,
+        worktreePath: worktree.path,
+        baseSha: worktree.baseSha,
         branch: worktree.branch,
         commitSha,
       });
@@ -223,21 +369,29 @@ async function processTicket(ticket: Ticket) {
         previousSha: worktree.baseSha,
         nextSha: commitSha,
       });
-      setRuntimeTicketState(ticket.id, {
+      persistProgress(ticket.id, {
         status: "in_progress",
         stage: "cleanup",
         attempt: attempts,
+        reviewRounds,
+        testFixRounds,
         runDir,
+        worktreePath: worktree.path,
+        baseSha: worktree.baseSha,
         branch: worktree.branch,
         commitSha,
       });
       removeTicketWorktree(worktree.path);
       deleteTicketBranch(worktree.branch);
-      setRuntimeTicketState(ticket.id, {
+      persistProgress(ticket.id, {
         status: "done",
         stage: "done",
         attempt: attempts,
+        reviewRounds,
+        testFixRounds,
         runDir,
+        worktreePath: worktree.path,
+        baseSha: worktree.baseSha,
         branch: worktree.branch,
         commitSha,
       });
@@ -277,29 +431,43 @@ async function processTicket(ticket: Ticket) {
       agentFailureStdoutPath: error instanceof AgentExecutionError ? path.join(runDir, "agent-failure-stdout.txt") : undefined,
     });
 
-    try {
-      removeTicketWorktree(worktree.path);
-      deleteTicketBranch(worktree.branch);
-    } catch (cleanupError) {
-      ticketLogger.error("Failed to clean up ticket worktree or branch", {
-        error: cleanupError,
+    const latestState = getRuntimeTicketState(ticket.id);
+
+    if (isTerminalError(message)) {
+      blockTicket(ticket.id, message, worktree.branch, commitSha, worktree.path, worktree.baseSha, runDir);
+      ticketLogger.warn("Ticket blocked after terminal failure; worktree preserved for recovery", {
         branch: worktree.branch,
         worktreePath: worktree.path,
-      });
-      blockTicket(
-        ticket.id,
-        `${message}; also failed to remove worktree cleanly: ${String(cleanupError)}`,
-        worktree.branch,
         commitSha,
-      );
+        reason: message,
+        runDir,
+      });
       throw error;
     }
 
-    blockTicket(ticket.id, message, worktree.branch, commitSha);
-    ticketLogger.warn("Ticket blocked after failure", {
+    persistProgress(ticket.id, {
+      status: "in_progress",
+      stage: latestState?.stage ?? "implementing",
+      attempt: latestState?.attempt ?? 0,
+      reviewRounds: latestState?.reviewRounds ?? 0,
+      testFixRounds: latestState?.testFixRounds ?? 0,
+      runDir,
+      worktreePath: worktree.path,
+      baseSha: worktree.baseSha,
       branch: worktree.branch,
       commitSha,
+      lastError: message,
+      pendingReviewSummary: latestState?.pendingReviewSummary,
+      pendingReviewIssues: latestState?.pendingReviewIssues,
+      pendingTestOutputPath: latestState?.pendingTestOutputPath,
+    });
+    ticketLogger.warn("Ticket failed at a resumable step; worktree preserved for automatic retry", {
+      branch: worktree.branch,
+      worktreePath: worktree.path,
+      commitSha,
       reason: message,
+      stage: latestState?.stage,
+      attempt: latestState?.attempt,
       runDir,
     });
     throw error;

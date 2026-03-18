@@ -171,6 +171,10 @@ export function resolveTicketStatus(ticket: Ticket, runtime: RuntimeState): Tick
   return runtime.tickets[ticket.id]?.status ?? ticket.status;
 }
 
+export function getRuntimeTicketState(ticketId: string) {
+  return readRuntimeState().tickets[ticketId] ?? null;
+}
+
 export function setRuntimeTicketState(ticketId: string, state: Omit<RuntimeTicketState, "updatedAt">) {
   withStateLock(() => {
     const runtime = readRuntimeState();
@@ -208,7 +212,9 @@ export function getRunnableTickets() {
   const runtime = readRuntimeState();
 
   return tickets.filter((ticket) => {
-    if (resolveTicketStatus(ticket, runtime) !== "todo") {
+    const status = resolveTicketStatus(ticket, runtime);
+
+    if (status !== "todo" && status !== "in_progress") {
       return false;
     }
 
@@ -274,26 +280,16 @@ export async function reconcileRuntimeState() {
     const job = await ticketQueue.getJob(queueJobId(ticketId));
 
     if (!job) {
-      logger.warn("Reconciling stale in-progress ticket without queue job", { ticketId });
-      setRuntimeTicketState(ticketId, {
-        ...state,
-        status: "blocked",
-        lastError: "Recovered stale in-progress ticket with no queue job; manual inspection required",
-      });
+      logger.warn("In-progress ticket has no queue job and will be eligible for re-enqueue", { ticketId });
       continue;
     }
 
     const jobState = await job.getState();
 
     if (!["waiting", "active", "delayed", "prioritized"].includes(jobState)) {
-      logger.warn("Reconciling stale in-progress ticket with unexpected BullMQ state", {
+      logger.warn("In-progress ticket has unexpected BullMQ state and will be eligible for re-enqueue", {
         ticketId,
         jobState,
-      });
-      setRuntimeTicketState(ticketId, {
-        ...state,
-        status: "blocked",
-        lastError: `Recovered stale in-progress ticket in BullMQ state '${jobState}'; manual inspection required`,
       });
     }
   }

@@ -12,10 +12,17 @@ export interface RuntimeTicketState {
   updatedAt: string;
   stage?: "queued" | "implementing" | "reviewing" | "testing" | "committing" | "cleanup" | "done" | "blocked";
   attempt?: number;
+  reviewRounds?: number;
+  testFixRounds?: number;
   runDir?: string;
+  worktreePath?: string;
+  baseSha?: string;
   branch?: string;
   commitSha?: string;
   lastError?: string;
+  pendingReviewSummary?: string;
+  pendingReviewIssues?: string[];
+  pendingTestOutputPath?: string;
 }
 
 export interface RuntimeState {

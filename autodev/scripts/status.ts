@@ -1,3 +1,4 @@
+import { closeQueue } from "../queue.js";
 import { ticketQueue } from "../queue.js";
 import { readRuntimeState, readTickets } from "../tickets.js";
 
@@ -71,7 +72,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+main()
+  .catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await closeQueue();
+  });

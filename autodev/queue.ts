@@ -18,3 +18,7 @@ export const ticketQueue = new Queue(PIPELINE.queueName, {
     removeOnFail: false,
   },
 });
+
+export async function closeQueue() {
+  await ticketQueue.close();
+}

@@ -272,6 +272,17 @@ export function buildTestFailurePrompt(ticket: Ticket, testOutput: string) {
     .replace("{{testOutput}}", testOutput);
 }
 
+export function buildResumeImplementPrompt(ticket: Ticket, context: string, lastError?: string) {
+  return [
+    "Resume work on the following ticket from the current worktree state.",
+    "The previous run was interrupted or failed before the ticket completed.",
+    "Inspect the existing files in the worktree, keep all valid progress, and continue without restarting from scratch.",
+    lastError ? `Last pipeline error:\n${lastError}` : "",
+    `Ticket:\n${JSON.stringify(ticket, null, 2)}`,
+    `Relevant Context:\n${context}`,
+  ].filter(Boolean).join("\n\n");
+}
+
 export function runImplementAgent(
   ticketId: string,
   cwd: string,
@@ -311,13 +322,29 @@ export function parseReviewResult(output: string): ReviewResult {
     throw new Error("Review output summary must be a string");
   }
 
-  if (!Array.isArray(parsed.issues) || parsed.issues.some((issue) => typeof issue !== "string")) {
-    throw new Error("Review output issues must be an array of strings");
+  if (!Array.isArray(parsed.issues)) {
+    throw new Error("Review output issues must be an array");
   }
+
+  const normalizedIssues = parsed.issues.map((issue) => {
+    if (typeof issue === "string") {
+      return issue;
+    }
+
+    if (issue && typeof issue === "object") {
+      const structuredIssue = issue as { severity?: unknown; title?: unknown; details?: unknown };
+      const severity = typeof structuredIssue.severity === "string" ? structuredIssue.severity.toUpperCase() : "ISSUE";
+      const title = typeof structuredIssue.title === "string" ? structuredIssue.title : "Untitled issue";
+      const details = typeof structuredIssue.details === "string" ? structuredIssue.details : JSON.stringify(issue);
+      return `${severity}: ${title} - ${details}`;
+    }
+
+    return String(issue);
+  });
 
   return {
     status: parsed.status,
     summary: parsed.summary,
-    issues: parsed.issues,
+    issues: normalizedIssues,
   };
 }

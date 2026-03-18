@@ -1,3 +1,4 @@
+import { closeQueue } from "./queue.js";
 import { enqueueRunnableTickets, reconcileRuntimeState } from "./tickets.js";
 import { logger } from "./utils/logger.js";
 
@@ -17,7 +18,11 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  logger.error("Autodev controller failed", { error });
-  process.exit(1);
-});
+main()
+  .catch((error) => {
+    logger.error("Autodev controller failed", { error });
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await closeQueue();
+  });
