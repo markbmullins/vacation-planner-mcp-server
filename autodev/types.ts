@@ -10,6 +10,9 @@ export interface Ticket {
 export interface RuntimeTicketState {
   status: TicketStatus;
   updatedAt: string;
+  stage?: "queued" | "implementing" | "reviewing" | "testing" | "committing" | "cleanup" | "done" | "blocked";
+  attempt?: number;
+  runDir?: string;
   branch?: string;
   commitSha?: string;
   lastError?: string;

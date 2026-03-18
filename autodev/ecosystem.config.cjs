@@ -1,5 +1,13 @@
+const path = require("node:path");
+
 module.exports = {
   apps: [
+    {
+      name: "autodev-opencode",
+      script: "opencode",
+      args: "serve --hostname 127.0.0.1 --port 4096",
+      cwd: path.join(__dirname, ".."),
+    },
     {
       name: "autodev-workers",
       script: "tsx",

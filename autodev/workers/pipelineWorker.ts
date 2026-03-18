@@ -5,9 +5,9 @@ import { execSync } from "node:child_process";
 import { PIPELINE } from "../pipeline.js";
 import { connection } from "../queue.js";
 import { resolveAutodevPath } from "../runtime.js";
-import { enqueueRunnableTickets, getTicketById, reconcileRuntimeState, setRuntimeTicketState } from "../tickets.js";
+import { enqueueRunnableTickets, getTicketById, reconcileRuntimeState, setRuntimeTicketState, touchRuntimeTicket } from "../tickets.js";
 import type { ReviewResult, Ticket } from "../types.js";
-import { buildImplementPrompt, buildRepairPrompt, buildTestFailurePrompt, parseReviewResult, runImplementAgent, runReviewAgent } from "../utils/agent.js";
+import { AgentExecutionError, buildImplementPrompt, buildRepairPrompt, buildTestFailurePrompt, parseReviewResult, runImplementAgent, runReviewAgent } from "../utils/agent.js";
 import { loadContext, selectRelevantFiles } from "../utils/context.js";
 import { commitTicket, hasChanges, workingTreeDiff, workingTreeStatus } from "../utils/git.js";
 import { logger } from "../utils/logger.js";
@@ -24,6 +24,11 @@ function ensureRunDir(ticketId: string) {
 
 function writeArtifact(runDir: string, name: string, content: string) {
   fs.writeFileSync(path.join(runDir, name), content, "utf8");
+}
+
+function writeAgentFailureArtifacts(runDir: string, error: AgentExecutionError) {
+  writeArtifact(runDir, "agent-failure-stderr.txt", error.stderr);
+  writeArtifact(runDir, "agent-failure-stdout.txt", error.stdout);
 }
 
 // Runs the configured test command with a hard timeout and distinguishes
@@ -62,6 +67,7 @@ function runTests(cwd: string) {
 function blockTicket(ticketId: string, message: string, branch?: string, commitSha?: string) {
   setRuntimeTicketState(ticketId, {
     status: "blocked",
+    stage: "blocked",
     lastError: message,
     branch,
     commitSha,
@@ -100,6 +106,9 @@ async function processTicket(ticket: Ticket) {
 
   setRuntimeTicketState(ticket.id, {
     status: "in_progress",
+    stage: "queued",
+    attempt: 0,
+    runDir,
     branch: worktree.branch,
   });
 
@@ -107,7 +116,7 @@ async function processTicket(ticket: Ticket) {
 
   try {
     const retrievalPlan = selectRelevantFiles(ticket);
-    const context = loadContext(worktree.path, retrievalPlan);
+    const context = loadContext(worktree.path, ticket, retrievalPlan);
     let nextPrompt = buildImplementPrompt(ticket, context);
     let reviewRounds = 0;
     let testFixRounds = 0;
@@ -115,15 +124,33 @@ async function processTicket(ticket: Ticket) {
 
     while (attempts < PIPELINE.maxAgentAttempts) {
       attempts += 1;
+      touchRuntimeTicket(ticket.id);
+      setRuntimeTicketState(ticket.id, {
+        status: "in_progress",
+        stage: "implementing",
+        attempt: attempts,
+        runDir,
+        branch: worktree.branch,
+        commitSha,
+      });
       ticketLogger.info("Starting implementation attempt", { attempt: attempts });
-      const implementOutput = runImplementAgent(ticket.id, worktree.path, nextPrompt);
+      const implementOutput = await runImplementAgent(ticket.id, worktree.path, nextPrompt, runDir, attempts, () => touchRuntimeTicket(ticket.id));
       writeArtifact(runDir, `implement-${attempts}.txt`, implementOutput);
       ticketLogger.info("Implementation attempt completed", {
         attempt: attempts,
         artifactPath: path.join(runDir, `implement-${attempts}.txt`),
       });
 
-      const reviewOutput = runReviewAgent(worktree.path, ticket);
+      touchRuntimeTicket(ticket.id);
+      setRuntimeTicketState(ticket.id, {
+        status: "in_progress",
+        stage: "reviewing",
+        attempt: attempts,
+        runDir,
+        branch: worktree.branch,
+        commitSha,
+      });
+      const reviewOutput = await runReviewAgent(worktree.path, ticket, runDir, attempts, () => touchRuntimeTicket(ticket.id));
       writeArtifact(runDir, `review-${attempts}.txt`, reviewOutput);
       ticketLogger.info("Review completed", {
         attempt: attempts,
@@ -148,7 +175,16 @@ async function processTicket(ticket: Ticket) {
         continue;
       }
 
+      setRuntimeTicketState(ticket.id, {
+        status: "in_progress",
+        stage: "testing",
+        attempt: attempts,
+        runDir,
+        branch: worktree.branch,
+        commitSha,
+      });
       const testResult = runTests(worktree.path);
+      touchRuntimeTicket(ticket.id);
       writeArtifact(runDir, `test-${attempts}.txt`, testResult.output);
       ticketLogger.info("Test command completed", {
         attempt: attempts,
@@ -172,6 +208,14 @@ async function processTicket(ticket: Ticket) {
         throw new Error("Pipeline reached approval with no file changes in isolated worktree");
       }
 
+      setRuntimeTicketState(ticket.id, {
+        status: "in_progress",
+        stage: "committing",
+        attempt: attempts,
+        runDir,
+        branch: worktree.branch,
+        commitSha,
+      });
       commitSha = commitTicket(worktree.path, ticket.id, ticket.title);
       ticketLogger.info("Created ticket commit", { commitSha, branch: worktree.branch });
       advanceIntegrationBranch(worktree.baseSha, commitSha);
@@ -179,10 +223,21 @@ async function processTicket(ticket: Ticket) {
         previousSha: worktree.baseSha,
         nextSha: commitSha,
       });
+      setRuntimeTicketState(ticket.id, {
+        status: "in_progress",
+        stage: "cleanup",
+        attempt: attempts,
+        runDir,
+        branch: worktree.branch,
+        commitSha,
+      });
       removeTicketWorktree(worktree.path);
       deleteTicketBranch(worktree.branch);
       setRuntimeTicketState(ticket.id, {
         status: "done",
+        stage: "done",
+        attempt: attempts,
+        runDir,
         branch: worktree.branch,
         commitSha,
       });
@@ -196,13 +251,30 @@ async function processTicket(ticket: Ticket) {
     throw new Error(`Exceeded maximum agent attempts (${PIPELINE.maxAgentAttempts})`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+
+    if (error instanceof AgentExecutionError) {
+      writeAgentFailureArtifacts(runDir, error);
+    }
+
     captureFailureArtifacts(runDir, worktree.path);
     ticketLogger.error("Ticket processing failed", {
-      error,
+      error: error instanceof AgentExecutionError
+        ? {
+          name: error.name,
+          message: error.message,
+          agent: error.agent,
+          model: error.model,
+          promptChars: error.promptChars,
+          promptTokensEstimate: error.promptTokensEstimate,
+          exitStatus: error.exitStatus,
+        }
+        : error,
       branch: worktree.branch,
       runDir,
       failureStatusPath: path.join(runDir, "failure-status.txt"),
       failureDiffPath: path.join(runDir, "failure-diff.patch"),
+      agentFailureStderrPath: error instanceof AgentExecutionError ? path.join(runDir, "agent-failure-stderr.txt") : undefined,
+      agentFailureStdoutPath: error instanceof AgentExecutionError ? path.join(runDir, "agent-failure-stdout.txt") : undefined,
     });
 
     try {

@@ -7,7 +7,9 @@
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build",
     "start": "node scripts/start.mjs",
-    "stop": "pm2 delete autodev-workers autodev-controller"
+    "stop": "pm2 delete autodev-opencode autodev-workers autodev-controller",
+    "status": "tsx scripts/status.ts",
+    "reset-ticket": "tsx scripts/reset-ticket.ts"
   },
   "dependencies": {
     "bullmq": "^5",

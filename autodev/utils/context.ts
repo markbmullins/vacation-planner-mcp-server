@@ -62,6 +62,35 @@ interface RetrievalPlan {
   importNeighbors: Map<string, string[]>;
 }
 
+function readTicketBacklogEntry(ticketId: string) {
+  const backlogPath = path.join(repoRoot, "docs", "delivery-backlog.md");
+
+  if (!fs.existsSync(backlogPath)) {
+    return null;
+  }
+
+  const lines = fs.readFileSync(backlogPath, "utf8").split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => line.startsWith(`- **${ticketId} `));
+
+  if (startIndex === -1) {
+    return null;
+  }
+
+  const block: string[] = [];
+
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const line = lines[index];
+
+    if (index > startIndex && (line.startsWith("- **E") || line.startsWith("## EPIC "))) {
+      break;
+    }
+
+    block.push(line);
+  }
+
+  return block.join("\n").trim();
+}
+
 function tokenize(text: string) {
   return text
     .toLowerCase()
@@ -395,8 +424,13 @@ export function selectRelevantFiles(ticket: Ticket) {
 
 // Renders a bounded context block that favors matched snippets over full-file
 // dumps, while still exposing candidate files the agent can inspect later.
-export function loadContext(basePath: string, plan: RetrievalPlan) {
+export function loadContext(basePath: string, ticket: Ticket, plan: RetrievalPlan) {
   const sections: string[] = [];
+  const backlogEntry = readTicketBacklogEntry(ticket.id);
+
+  if (backlogEntry) {
+    sections.push(`TICKET DETAILS:\n${backlogEntry}`);
+  }
 
   sections.push(`KEYWORDS: ${plan.keywords.join(", ")}`);
   sections.push(`PRIMARY FILES: ${plan.primaryFiles.join(", ")}`);

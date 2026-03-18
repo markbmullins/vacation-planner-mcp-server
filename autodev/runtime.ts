@@ -7,7 +7,7 @@ const autodevEntry = fileURLToPath(import.meta.url);
 export const autodevRoot = path.dirname(autodevEntry);
 export const repoRoot = path.resolve(autodevRoot, "..");
 
-dotenv.config({ path: path.join(autodevRoot, ".env") });
+dotenv.config({ path: path.join(autodevRoot, ".env"), quiet: true });
 
 export function resolveAutodevPath(...segments: string[]) {
   return path.join(autodevRoot, ...segments);

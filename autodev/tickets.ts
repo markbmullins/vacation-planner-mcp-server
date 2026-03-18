@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { PIPELINE } from "./pipeline.js";
 import { ticketQueue } from "./queue.js";
 import { resolveAutodevPath, resolveRepoPath } from "./runtime.js";
 import type { RuntimeState, RuntimeTicketState, Ticket, TicketStatus } from "./types.js";
@@ -11,6 +12,44 @@ const runtimeStatePath = path.join(runtimeStateDir, "runtime-state.json");
 const runtimeStateLockDir = path.join(runtimeStateDir, "runtime-state.lock");
 const runtimeStateLockInfoPath = path.join(runtimeStateLockDir, "owner.json");
 const stateLockStaleMs = 5 * 60 * 1000;
+
+function queueJobId(ticketId: string) {
+  return `ticket-${ticketId}`;
+}
+
+async function ensureRunnableJobSlot(ticketId: string) {
+  const existingJob = await ticketQueue.getJob(queueJobId(ticketId));
+
+  if (!existingJob) {
+    return { reusable: false, existingState: null as string | null };
+  }
+
+  const existingState = await existingJob.getState();
+
+  if (existingState === "active") {
+    const runtimeTicket = readRuntimeState().tickets[ticketId];
+    const updatedAtMs = runtimeTicket?.updatedAt ? Date.parse(runtimeTicket.updatedAt) : Number.NaN;
+    const stale = Number.isNaN(updatedAtMs) || Date.now() - updatedAtMs >= PIPELINE.activeJobStaleMs;
+
+    if (stale) {
+      logger.warn("Removing stale active queue job for ticket", {
+        ticketId,
+        existingState,
+        runtimeUpdatedAt: runtimeTicket?.updatedAt,
+        staleThresholdMs: PIPELINE.activeJobStaleMs,
+      });
+      await ticketQueue.remove(queueJobId(ticketId));
+      return { reusable: false, existingState };
+    }
+  }
+
+  if (["failed", "completed", "unknown"].includes(existingState)) {
+    await existingJob.remove();
+    return { reusable: false, existingState };
+  }
+
+  return { reusable: true, existingState };
+}
 
 function ensureRuntimeStateDir() {
   fs.mkdirSync(runtimeStateDir, { recursive: true });
@@ -143,6 +182,23 @@ export function setRuntimeTicketState(ticketId: string, state: Omit<RuntimeTicke
   });
 }
 
+export function touchRuntimeTicket(ticketId: string) {
+  withStateLock(() => {
+    const runtime = readRuntimeState();
+    const existing = runtime.tickets[ticketId];
+
+    if (!existing) {
+      return;
+    }
+
+    runtime.tickets[ticketId] = {
+      ...existing,
+      updatedAt: new Date().toISOString(),
+    };
+    writeRuntimeState(runtime);
+  });
+}
+
 export function getTicketById(ticketId: string) {
   return readTickets().find((ticket) => ticket.id === ticketId) ?? null;
 }
@@ -171,12 +227,20 @@ export function getRunnableTickets() {
 export async function enqueueRunnableTickets() {
   const runnable = getRunnableTickets();
   const enqueued: string[] = [];
+  const alreadyQueued: Array<{ ticketId: string; state: string | null }> = [];
 
   for (const ticket of runnable) {
+    const slot = await ensureRunnableJobSlot(ticket.id);
+
+    if (slot.reusable) {
+      alreadyQueued.push({ ticketId: ticket.id, state: slot.existingState });
+      continue;
+    }
+
     await ticketQueue.add(
       "process-ticket",
       { ticketId: ticket.id },
-      { jobId: `ticket:${ticket.id}` },
+      { jobId: queueJobId(ticket.id) },
     );
     enqueued.push(ticket.id);
   }
@@ -185,6 +249,12 @@ export async function enqueueRunnableTickets() {
     logger.info("Enqueued runnable tickets", {
       ticketIds: enqueued,
       count: enqueued.length,
+    });
+  }
+
+  if (alreadyQueued.length > 0) {
+    logger.info("Skipped enqueue for tickets already present in queue", {
+      tickets: alreadyQueued,
     });
   }
 
@@ -201,7 +271,7 @@ export async function reconcileRuntimeState() {
       continue;
     }
 
-    const job = await ticketQueue.getJob(`ticket:${ticketId}`);
+    const job = await ticketQueue.getJob(queueJobId(ticketId));
 
     if (!job) {
       logger.warn("Reconciling stale in-progress ticket without queue job", { ticketId });

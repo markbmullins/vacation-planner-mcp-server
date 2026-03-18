@@ -26,6 +26,8 @@ export const PIPELINE = {
   maxAgentAttempts: parsePositiveInt(process.env.AUTODEV_MAX_AGENT_ATTEMPTS, 6),
   agentTimeoutMs: parsePositiveMs(process.env.AUTODEV_AGENT_TIMEOUT_MS, 20 * 60 * 1000),
   testTimeoutMs: parsePositiveMs(process.env.AUTODEV_TEST_TIMEOUT_MS, 15 * 60 * 1000),
+  agentHeartbeatMs: parsePositiveMs(process.env.AUTODEV_AGENT_HEARTBEAT_MS, 30 * 1000),
+  activeJobStaleMs: parsePositiveMs(process.env.AUTODEV_ACTIVE_JOB_STALE_MS, 2 * 60 * 1000),
 };
 
 if (PIPELINE.workerConcurrency !== 1) {
