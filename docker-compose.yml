@@ -1,0 +1,72 @@
+# Dive Vacation Planner - Local Development Infrastructure
+#
+# Services:
+#   postgres  - PostgreSQL 16 with pgvector extension (port 5432)
+#   redis     - Redis 7 for BullMQ job queues (port 6379)
+#
+# Usage:
+#   docker compose up -d          # start all services in the background
+#   docker compose down           # stop all services
+#   docker compose down -v        # stop all services and remove volumes (wipes DB)
+#   docker compose logs -f        # follow logs
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-diveuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-divepass}
+      POSTGRES_DB: ${POSTGRES_DB:-divedb}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-diveuser} -d ${POSTGRES_DB:-divedb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # When REDIS_PASSWORD is blank (the default local setup), Redis starts
+    # without AUTH so no password is required to connect.
+    # When REDIS_PASSWORD is set, --requirepass is added and the healthcheck
+    # authenticates with -a to match.
+    entrypoint: >
+      sh -c "
+        if [ -n \"$$REDIS_PASSWORD\" ]; then
+          exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+        else
+          exec redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+        fi
+      "
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - |
+          if [ -n "$$REDIS_PASSWORD" ]; then
+            redis-cli --no-auth-warning -a "$$REDIS_PASSWORD" ping
+          else
+            redis-cli ping
+          fi
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

@@ -10,3 +10,10 @@ apps/*/dist/
 apps/*/node_modules/
 packages/*/dist/
 packages/*/node_modules/
+
+# Local environment (never commit real secrets)
+.env
+!.env.example
+
+# Docker Compose local overrides
+docker-compose.override.yml
