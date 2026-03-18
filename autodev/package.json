@@ -1,0 +1,23 @@
+{
+  "name": "autodev",
+  "type": "module",
+  "scripts": {
+    "controller": "tsx controller.ts",
+    "workers": "tsx workers/index.ts",
+    "build": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build",
+    "start": "node scripts/start.mjs",
+    "stop": "pm2 delete autodev-workers autodev-controller"
+  },
+  "dependencies": {
+    "bullmq": "^5",
+    "dotenv": "^17.3.1",
+    "ioredis": "^5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "pm2": "^5.4.3",
+    "tsx": "^4",
+    "typescript": "^5.4.5"
+  }
+}

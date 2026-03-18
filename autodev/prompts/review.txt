@@ -1,0 +1,26 @@
+Review the changes produced for the following ticket.
+
+Focus on:
+
+- correctness
+- adherence to system architecture
+- missing implementation
+- regressions
+- test coverage
+
+Analyze the git diff for the current worktree before deciding.
+
+Return JSON wrapped exactly in these markers:
+
+AUTODEV_REVIEW_JSON_START
+{
+  "status": "approved | changes_required",
+  "summary": "",
+  "issues": []
+}
+AUTODEV_REVIEW_JSON_END
+
+Use `changes_required` if there are correctness gaps, policy violations, missing implementation, or missing tests that should block commit.
+
+Ticket:
+{{ticket}}

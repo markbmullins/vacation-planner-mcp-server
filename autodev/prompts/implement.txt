@@ -1,0 +1,17 @@
+Implement the following ticket.
+
+Focus only on implementation work.
+
+Follow the repository architecture and existing patterns.
+
+Read and follow `AGENTS.md` plus the source-of-truth docs in `docs/` before making changes.
+
+Respect ticket dependencies and do not modify ticket tracking files.
+
+Do not commit changes.
+
+Ticket:
+{{ticket}}
+
+Relevant Context:
+{{context}}

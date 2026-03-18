@@ -1,0 +1,11 @@
+Tests failed while implementing this ticket.
+
+Fix the code so that tests pass.
+
+Preserve the ticket scope, avoid unrelated changes, and do not commit.
+
+Test Output:
+{{testOutput}}
+
+Ticket:
+{{ticket}}

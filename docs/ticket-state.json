@@ -1,0 +1,434 @@
+[
+  {
+    "id": "E1-T1",
+    "title": "Project scaffolding and package boundaries",
+    "status": "todo",
+    "dependencies": []
+  },
+  {
+    "id": "E1-T2",
+    "title": "Local infrastructure and developer bootstrap",
+    "status": "todo",
+    "dependencies": ["E1-T1"]
+  },
+  {
+    "id": "E1-T3",
+    "title": "Configuration, secrets, and environment loading",
+    "status": "todo",
+    "dependencies": ["E1-T1"]
+  },
+  {
+    "id": "E1-T4",
+    "title": "Base server and health endpoints",
+    "status": "todo",
+    "dependencies": ["E1-T2", "E1-T3"]
+  },
+  {
+    "id": "E1-T5",
+    "title": "Shared logging, request IDs, and error envelope",
+    "status": "todo",
+    "dependencies": ["E1-T1"]
+  },
+  {
+    "id": "E1-T6",
+    "title": "CI pipeline and quality gates",
+    "status": "todo",
+    "dependencies": ["E1-T1"]
+  },
+
+  {
+    "id": "E2-T1",
+    "title": "Seed dataset for destinations, operators, flights, and stays",
+    "status": "todo",
+    "dependencies": ["E1-T2"]
+  },
+  {
+    "id": "E2-T2",
+    "title": "Trip request intake and normalization service",
+    "status": "todo",
+    "dependencies": ["E1-T1", "E2-T1"]
+  },
+  {
+    "id": "E2-T3",
+    "title": "Skeleton planning orchestrator",
+    "status": "todo",
+    "dependencies": ["E2-T1", "E2-T2"]
+  },
+  {
+    "id": "E2-T4",
+    "title": "Deterministic no-fly-after-diving rule in itinerary builder",
+    "status": "todo",
+    "dependencies": ["E2-T3"]
+  },
+  {
+    "id": "E2-T5",
+    "title": "Initial ranking and explanation scaffold",
+    "status": "todo",
+    "dependencies": ["E2-T3"]
+  },
+  {
+    "id": "E2-T6",
+    "title": "Thin FastMCP adapter and first tool contracts",
+    "status": "todo",
+    "dependencies": ["E2-T3", "E2-T5"]
+  },
+
+  {
+    "id": "E3-T1",
+    "title": "Core schema migrations for request and plan entities",
+    "status": "todo",
+    "dependencies": ["E1-T2"]
+  },
+  {
+    "id": "E3-T2",
+    "title": "Discovery and operator schema migrations",
+    "status": "todo",
+    "dependencies": ["E1-T2"]
+  },
+  {
+    "id": "E3-T3",
+    "title": "Travel and booking option schema migrations",
+    "status": "todo",
+    "dependencies": ["E1-T2"]
+  },
+  {
+    "id": "E3-T4",
+    "title": "Research, provenance, and ingestion schema migrations",
+    "status": "todo",
+    "dependencies": ["E1-T2"]
+  },
+  {
+    "id": "E3-T5",
+    "title": "Vector support and document storage",
+    "status": "todo",
+    "dependencies": ["E3-T4"]
+  },
+  {
+    "id": "E3-T6",
+    "title": "Repository layer and transaction patterns",
+    "status": "todo",
+    "dependencies": ["E3-T1", "E3-T2", "E3-T3", "E3-T4"]
+  },
+  {
+    "id": "E3-T7",
+    "title": "Planner persistence integration",
+    "status": "todo",
+    "dependencies": ["E2-T3", "E3-T6"]
+  },
+
+  {
+    "id": "E4-T1",
+    "title": "BullMQ job model and worker queue setup",
+    "status": "todo",
+    "dependencies": ["E1-T2", "E1-T5"]
+  },
+  {
+    "id": "E4-T2",
+    "title": "Crawl target discovery and scheduling",
+    "status": "todo",
+    "dependencies": ["E4-T1", "E3-T4"]
+  },
+  {
+    "id": "E4-T3",
+    "title": "Playwright and Crawlee crawler implementation",
+    "status": "todo",
+    "dependencies": ["E4-T2"]
+  },
+  {
+    "id": "E4-T4",
+    "title": "crawl4ai extraction pipeline",
+    "status": "todo",
+    "dependencies": ["E4-T3", "E3-T4"]
+  },
+  {
+    "id": "E4-T5",
+    "title": "Reddit and community research ingestion",
+    "status": "todo",
+    "dependencies": ["E4-T1", "E3-T4"]
+  },
+  {
+    "id": "E4-T6",
+    "title": "Operator normalization and merge service",
+    "status": "todo",
+    "dependencies": ["E4-T4", "E4-T5", "E3-T2"]
+  },
+  {
+    "id": "E4-T7",
+    "title": "Freshness policy and recrawl rules",
+    "status": "todo",
+    "dependencies": ["E4-T2", "E4-T6"]
+  },
+
+  {
+    "id": "E5-T1",
+    "title": "Flight provider abstraction and initial connector",
+    "status": "todo",
+    "dependencies": ["E3-T3"]
+  },
+  {
+    "id": "E5-T2",
+    "title": "Accommodation provider abstraction and initial connector",
+    "status": "todo",
+    "dependencies": ["E3-T3"]
+  },
+  {
+    "id": "E5-T3",
+    "title": "Travel option refresh jobs and persistence integration",
+    "status": "todo",
+    "dependencies": ["E4-T1", "E5-T1", "E5-T2"]
+  },
+  {
+    "id": "E5-T4",
+    "title": "Origin and destination mapping and airport resolution",
+    "status": "todo",
+    "dependencies": ["E2-T2", "E5-T1"]
+  },
+  {
+    "id": "E5-T5",
+    "title": "Travel planning service integration",
+    "status": "todo",
+    "dependencies": ["E3-T7", "E5-T3", "E5-T4"]
+  },
+
+  {
+    "id": "E6-T1",
+    "title": "Destination scoring model",
+    "status": "todo",
+    "dependencies": ["E3-T7", "E4-T7", "E5-T5"]
+  },
+  {
+    "id": "E6-T2",
+    "title": "Operator comparison model",
+    "status": "todo",
+    "dependencies": ["E4-T6", "E4-T7"]
+  },
+  {
+    "id": "E6-T3",
+    "title": "Cost estimation engine",
+    "status": "todo",
+    "dependencies": ["E5-T5", "E4-T6"]
+  },
+  {
+    "id": "E6-T4",
+    "title": "Constraint evaluation framework",
+    "status": "todo",
+    "dependencies": ["E2-T4", "E3-T1"]
+  },
+  {
+    "id": "E6-T5",
+    "title": "Itinerary generator refinement",
+    "status": "todo",
+    "dependencies": ["E6-T3", "E6-T4"]
+  },
+  {
+    "id": "E6-T6",
+    "title": "Ranking explanations and provenance surfacing",
+    "status": "todo",
+    "dependencies": ["E6-T1", "E6-T2", "E3-T4"]
+  },
+
+  {
+    "id": "E7-T1",
+    "title": "Final tool schemas for all MVP categories",
+    "status": "todo",
+    "dependencies": ["E2-T6", "E5-T5", "E6-T6"]
+  },
+  {
+    "id": "E7-T2",
+    "title": "Partial workflow tools and composable service endpoints",
+    "status": "todo",
+    "dependencies": ["E7-T1"]
+  },
+  {
+    "id": "E7-T3",
+    "title": "Orchestration resilience and graceful degradation",
+    "status": "todo",
+    "dependencies": ["E6-T5", "E5-T5", "E4-T7"]
+  },
+  {
+    "id": "E7-T4",
+    "title": "Planner replay and deterministic regeneration",
+    "status": "todo",
+    "dependencies": ["E3-T7", "E7-T3"]
+  },
+
+  {
+    "id": "E8-T1",
+    "title": "Knowledge base document model and chunking",
+    "status": "todo",
+    "dependencies": ["E3-T5", "E4-T4"]
+  },
+  {
+    "id": "E8-T2",
+    "title": "Entity-centric KB views for destinations and operators",
+    "status": "todo",
+    "dependencies": ["E8-T1", "E4-T6"]
+  },
+  {
+    "id": "E8-T3",
+    "title": "Retrieval service for planner and research tools",
+    "status": "todo",
+    "dependencies": ["E8-T1"]
+  },
+  {
+    "id": "E8-T4",
+    "title": "Knowledge refresh and invalidation rules",
+    "status": "todo",
+    "dependencies": ["E8-T2", "E4-T7"]
+  },
+  {
+    "id": "E8-T5",
+    "title": "KB-backed recommendation enhancements",
+    "status": "todo",
+    "dependencies": ["E6-T1", "E6-T2", "E8-T3"]
+  },
+
+  {
+    "id": "E9-T1",
+    "title": "Metrics and tracing instrumentation",
+    "status": "todo",
+    "dependencies": ["E1-T5", "E4-T1"]
+  },
+  {
+    "id": "E9-T2",
+    "title": "Planner debug endpoint or view",
+    "status": "todo",
+    "dependencies": ["E3-T7", "E6-T6"]
+  },
+  {
+    "id": "E9-T3",
+    "title": "Crawl and admin operations view",
+    "status": "todo",
+    "dependencies": ["E4-T1", "E4-T7"]
+  },
+  {
+    "id": "E9-T4",
+    "title": "Source provenance and freshness display",
+    "status": "todo",
+    "dependencies": ["E4-T7", "E6-T6"]
+  },
+
+  {
+    "id": "E10-T1",
+    "title": "Authentication and authorization for admin surfaces",
+    "status": "todo",
+    "dependencies": ["E9-T2", "E9-T3"]
+  },
+  {
+    "id": "E10-T2",
+    "title": "PII handling and data minimization",
+    "status": "todo",
+    "dependencies": ["E3-T1", "E1-T5"]
+  },
+  {
+    "id": "E10-T3",
+    "title": "Secrets management and outbound request hygiene",
+    "status": "todo",
+    "dependencies": ["E1-T3", "E4-T3", "E5-T1", "E5-T2"]
+  },
+  {
+    "id": "E10-T4",
+    "title": "Retention and deletion controls",
+    "status": "todo",
+    "dependencies": ["E3-T1", "E3-T4"]
+  },
+
+  {
+    "id": "E11-T1",
+    "title": "Benchmark scenario suite",
+    "status": "todo",
+    "dependencies": ["E2-T3"]
+  },
+  {
+    "id": "E11-T2",
+    "title": "Service-level unit tests for planning rules",
+    "status": "todo",
+    "dependencies": ["E6-T1", "E6-T3", "E6-T4"]
+  },
+  {
+    "id": "E11-T3",
+    "title": "Integration tests for planner and persistence flows",
+    "status": "todo",
+    "dependencies": ["E3-T7", "E7-T3"]
+  },
+  {
+    "id": "E11-T4",
+    "title": "Worker pipeline integration tests",
+    "status": "todo",
+    "dependencies": ["E4-T6"]
+  },
+  {
+    "id": "E11-T5",
+    "title": "Ranking and recommendation evaluation loop",
+    "status": "todo",
+    "dependencies": ["E6-T1", "E6-T2", "E8-T5"]
+  },
+  {
+    "id": "E11-T6",
+    "title": "Contract tests for MCP tools",
+    "status": "todo",
+    "dependencies": ["E7-T1"]
+  },
+
+  {
+    "id": "E12-T1",
+    "title": "Environment-specific deployment manifests",
+    "status": "todo",
+    "dependencies": ["E1-T4", "E4-T1"]
+  },
+  {
+    "id": "E12-T2",
+    "title": "Database migration and release workflow",
+    "status": "todo",
+    "dependencies": ["E3-T1", "E3-T2", "E3-T3", "E3-T4", "E3-T5"]
+  },
+  {
+    "id": "E12-T3",
+    "title": "Queue operations, scaling, and failure playbooks",
+    "status": "todo",
+    "dependencies": ["E4-T1", "E9-T1"]
+  },
+  {
+    "id": "E12-T4",
+    "title": "Backup, restore, and disaster recovery validation",
+    "status": "todo",
+    "dependencies": ["E3-T7", "E12-T1"]
+  },
+
+  {
+    "id": "E13-T1",
+    "title": "Calendar export integration",
+    "status": "todo",
+    "dependencies": ["E6-T5", "E10-T1"]
+  },
+  {
+    "id": "E13-T2",
+    "title": "Manual trip plan editing and re-costing",
+    "status": "todo",
+    "dependencies": ["E3-T7", "E6-T3", "E6-T5"]
+  },
+  {
+    "id": "E13-T3",
+    "title": "Saved preferences and returning-traveler profiles",
+    "status": "todo",
+    "dependencies": ["E10-T2"]
+  },
+  {
+    "id": "E13-T4",
+    "title": "Proactive freshness alerts and recrawl triggers",
+    "status": "todo",
+    "dependencies": ["E4-T7", "E9-T3"]
+  },
+  {
+    "id": "E13-T5",
+    "title": "Alternative recommendation strategies and experimentation",
+    "status": "todo",
+    "dependencies": ["E11-T5", "E8-T5"]
+  },
+  {
+    "id": "E13-T6",
+    "title": "Remaining optional product-surface tools",
+    "status": "todo",
+    "dependencies": ["E7-T2", "E8-T5"]
+  }
+]

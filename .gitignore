@@ -1,0 +1,8 @@
+node_modules/
+autodev/node_modules/
+autodev/.env
+autodev/.state/
+autodev/.worktrees/
+autodev/.runs/
+.DS_Store
+.pm2/

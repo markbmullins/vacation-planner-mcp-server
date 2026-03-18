@@ -1,0 +1,23 @@
+{
+  "name": "vacation-mcp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npm --prefix autodev run start",
+    "stop": "npm --prefix autodev run stop",
+    "autodev:controller": "npm --prefix autodev run controller",
+    "autodev:workers": "npm --prefix autodev run workers",
+    "autodev:start": "npm --prefix autodev run start",
+    "autodev:stop": "npm --prefix autodev run stop",
+    "build": "npm --prefix autodev run build",
+    "test": "npm --prefix autodev test"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^0.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.5"
+  }
+}
