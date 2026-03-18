@@ -6,3 +6,7 @@ autodev/.worktrees/
 autodev/.runs/
 .DS_Store
 .pm2/
+apps/*/dist/
+apps/*/node_modules/
+packages/*/dist/
+packages/*/node_modules/

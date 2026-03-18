@@ -2,6 +2,10 @@
   "name": "vacation-mcp",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "start": "npm --prefix autodev run start",
     "stop": "npm --prefix autodev run stop",
@@ -9,8 +13,10 @@
     "autodev:workers": "npm --prefix autodev run workers",
     "autodev:start": "npm --prefix autodev run start",
     "autodev:stop": "npm --prefix autodev run stop",
-    "build": "npm --prefix autodev run build",
-    "test": "npm --prefix autodev test"
+    "build": "npm run build:packages && npm run build:apps && npm --prefix autodev run build",
+    "build:packages": "npm run build --workspace=packages/shared --workspace=packages/domain --workspace=packages/data-access --workspace=packages/adapters --workspace=packages/services",
+    "build:apps": "npm run build --workspace=apps/mcp-server --workspace=apps/worker",
+    "test": "npm run build"
   },
   "dependencies": {
     "@opencode-ai/sdk": "^0.3.0"
