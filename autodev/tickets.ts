@@ -211,10 +211,32 @@ export function getRunnableTickets() {
   const tickets = readTickets();
   const runtime = readRuntimeState();
 
+  const resumableInProgress = tickets.filter((ticket) => {
+    const status = resolveTicketStatus(ticket, runtime);
+
+    if (status !== "in_progress") {
+      return false;
+    }
+
+    return ticket.dependencies.every((dependencyId) => {
+      const dependency = tickets.find((candidate) => candidate.id === dependencyId);
+
+      if (!dependency) {
+        return false;
+      }
+
+      return resolveTicketStatus(dependency, runtime) === "done";
+    });
+  });
+
+  if (resumableInProgress.length > 0) {
+    return resumableInProgress;
+  }
+
   return tickets.filter((ticket) => {
     const status = resolveTicketStatus(ticket, runtime);
 
-    if (status !== "todo" && status !== "in_progress") {
+    if (status !== "todo") {
       return false;
     }
 
@@ -230,10 +252,66 @@ export function getRunnableTickets() {
   });
 }
 
+async function removeQueuedLowerPriorityJobs(priorityTicketIds: Set<string>) {
+  const waitingJobs = await ticketQueue.getJobs(["waiting", "delayed", "prioritized"]);
+  const removed: string[] = [];
+
+  for (const job of waitingJobs) {
+    const ticketId = String(job.data.ticketId ?? "");
+
+    if (!ticketId || priorityTicketIds.has(ticketId)) {
+      continue;
+    }
+
+    await job.remove();
+    removed.push(ticketId);
+  }
+
+  if (removed.length > 0) {
+    logger.warn("Removed lower-priority queued tickets while resuming in-progress work", {
+      ticketIds: removed,
+      resumePriority: Array.from(priorityTicketIds),
+    });
+  }
+}
+
+async function purgeOrphanedQueueJobs(runtimeTicketIds: Set<string>) {
+  const jobs = await ticketQueue.getJobs(["waiting", "active", "delayed", "prioritized", "failed", "completed"]);
+  const removed: Array<{ ticketId: string; state: string }> = [];
+
+  for (const job of jobs) {
+    const ticketId = String(job.data.ticketId ?? "");
+
+    if (!ticketId || runtimeTicketIds.has(ticketId)) {
+      continue;
+    }
+
+    const state = await job.getState();
+    await job.remove();
+    removed.push({ ticketId, state });
+  }
+
+  if (removed.length > 0) {
+    logger.warn("Purged orphaned BullMQ jobs with no runtime state", { jobs: removed });
+  }
+}
+
 export async function enqueueRunnableTickets() {
   const runnable = getRunnableTickets();
   const enqueued: string[] = [];
   const alreadyQueued: Array<{ ticketId: string; state: string | null }> = [];
+
+  const runtime = readRuntimeState();
+  await purgeOrphanedQueueJobs(new Set(Object.keys(runtime.tickets)));
+  const resumePriorityIds = new Set(
+    runnable
+      .filter((ticket) => resolveTicketStatus(ticket, runtime) === "in_progress")
+      .map((ticket) => ticket.id),
+  );
+
+  if (resumePriorityIds.size > 0) {
+    await removeQueuedLowerPriorityJobs(resumePriorityIds);
+  }
 
   for (const ticket of runnable) {
     const slot = await ensureRunnableJobSlot(ticket.id);

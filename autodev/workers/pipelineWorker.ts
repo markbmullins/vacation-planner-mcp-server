@@ -2,13 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "bullmq";
 import { execSync } from "node:child_process";
+import { shouldStopAfterCurrentTicket } from "../control.js";
 import { PIPELINE } from "../pipeline.js";
 import { connection } from "../queue.js";
 import { resolveAutodevPath } from "../runtime.js";
-import { enqueueRunnableTickets, getRuntimeTicketState, getTicketById, reconcileRuntimeState, setRuntimeTicketState, touchRuntimeTicket } from "../tickets.js";
+import { enqueueRunnableTickets, getRuntimeTicketState, getTicketById, readRuntimeState, reconcileRuntimeState, setRuntimeTicketState, touchRuntimeTicket } from "../tickets.js";
 import type { ReviewResult, RuntimeTicketState, Ticket } from "../types.js";
 import { AgentExecutionError, buildImplementPrompt, buildRepairPrompt, buildResumeImplementPrompt, buildTestFailurePrompt, parseReviewResult, runImplementAgent, runReviewAgent } from "../utils/agent.js";
 import { loadContext, selectRelevantFiles } from "../utils/context.js";
+import { appendDeferredFollowup, hasDeferredFollowup } from "../utils/followups.js";
 import { commitTicket, hasChanges, workingTreeDiff, workingTreeStatus } from "../utils/git.js";
 import { logger } from "../utils/logger.js";
 import { advanceIntegrationBranch, createTicketWorktree, deleteTicketBranch, removeTicketWorktree } from "../utils/worktree.js";
@@ -38,6 +40,53 @@ function isTerminalError(message: string) {
     "Tests failed after",
     "Pipeline reached approval with no file changes",
   ].some((prefix) => message.includes(prefix));
+}
+
+function reviewSeverity(issue: string) {
+  if (issue.startsWith("BLOCKER:")) return "blocker";
+  if (issue.startsWith("MAJOR:")) return "major";
+  if (issue.startsWith("MINOR:")) return "minor";
+  return "unknown";
+}
+
+function normalizeIssueFingerprint(issue: string) {
+  return issue
+    .toLowerCase()
+    .replace(/`[^`]+`/g, "")
+    .replace(/[a-z0-9_./-]+:\d+(?::\d+)?/g, "")
+    .replace(/\b[0-9]{2,}\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+}
+
+function reviewLooksLikeDrift(previousIssues: string[] | undefined, nextIssues: string[]) {
+  if (!previousIssues || previousIssues.length === 0 || nextIssues.length === 0) {
+    return false;
+  }
+
+  const previous = new Set(previousIssues.map(normalizeIssueFingerprint));
+  const next = new Set(nextIssues.map(normalizeIssueFingerprint));
+  let overlap = 0;
+
+  for (const fingerprint of next) {
+    if (previous.has(fingerprint)) {
+      overlap += 1;
+    }
+  }
+
+  return overlap === 0;
+}
+
+function shouldAutoApproveReview(review: ReviewResult, reviewRounds: number) {
+  if (reviewRounds < 2) {
+    return false;
+  }
+
+  return review.issues.every((issue) => {
+    const severity = reviewSeverity(issue);
+    return severity === "minor" || severity === "unknown";
+  });
 }
 
 function resumePromptFromRuntime(ticket: Ticket, runtimeTicket: RuntimeTicketState | null, context: string) {
@@ -259,17 +308,77 @@ async function processTicket(ticket: Ticket) {
         });
 
         const review = parseReviewResult(reviewOutput);
+        const currentRuntimeState = getRuntimeTicketState(ticket.id);
+        const priorReviewIssues = currentRuntimeState?.pendingReviewIssues;
 
         if (review.status === "changes_required") {
+          if (shouldAutoApproveReview(review, reviewRounds)) {
+            ticketLogger.warn("Auto-approving review after repeated minor-only feedback", {
+              attempt: attempts,
+              reviewSummary: review.summary,
+              issues: review.issues,
+            });
+          } else {
           ticketLogger.warn("Review requested changes", {
             attempt: attempts,
             reviewSummary: review.summary,
             issues: review.issues,
           });
+          }
+
+          if (reviewLooksLikeDrift(priorReviewIssues, review.issues) && reviewRounds >= PIPELINE.maxReviewDriftRounds) {
+            throw new Error(`Review drift detected after ${reviewRounds + 1} rounds; manual review required: ${formatReviewIssues(review)}`);
+          }
+
+          if (shouldAutoApproveReview(review, reviewRounds)) {
+            persistProgress(ticket.id, {
+              status: "in_progress",
+              stage: "testing",
+              attempt: attempts,
+              reviewRounds,
+              testFixRounds,
+              runDir,
+              worktreePath: worktree.path,
+              baseSha: worktree.baseSha,
+              branch: worktree.branch,
+              commitSha,
+              pendingReviewSummary: undefined,
+              pendingReviewIssues: undefined,
+            });
+            stage = "testing";
+            continue;
+          }
+
           reviewRounds += 1;
 
           if (reviewRounds > PIPELINE.maxReviewRounds) {
-            throw new Error(`Review rejected changes after ${PIPELINE.maxReviewRounds} rounds: ${formatReviewIssues(review)}`);
+            const existingDeferredFollowupId = currentRuntimeState?.deferredFollowupId;
+            const deferredFollowupId = existingDeferredFollowupId && hasDeferredFollowup(existingDeferredFollowupId)
+              ? existingDeferredFollowupId
+              : appendDeferredFollowup(ticket, review);
+            ticketLogger.warn("Deferred remaining review issues into follow-up ticket after review round cap", {
+              attempt: attempts,
+              deferredFollowupId,
+              reviewSummary: review.summary,
+              issues: review.issues,
+            });
+            persistProgress(ticket.id, {
+              status: "in_progress",
+              stage: "testing",
+              attempt: attempts,
+              reviewRounds,
+              testFixRounds,
+              runDir,
+              worktreePath: worktree.path,
+              baseSha: worktree.baseSha,
+              branch: worktree.branch,
+              commitSha,
+              pendingReviewSummary: undefined,
+              pendingReviewIssues: undefined,
+              deferredFollowupId,
+            });
+            stage = "testing";
+            continue;
           }
 
           nextPrompt = buildRepairPrompt(ticket, review);
@@ -286,6 +395,7 @@ async function processTicket(ticket: Ticket) {
             commitSha,
             pendingReviewSummary: review.summary,
             pendingReviewIssues: review.issues,
+            deferredFollowupId: currentRuntimeState?.deferredFollowupId,
           });
           stage = "implementing";
           continue;
@@ -304,6 +414,7 @@ async function processTicket(ticket: Ticket) {
           commitSha,
           pendingReviewSummary: undefined,
           pendingReviewIssues: undefined,
+          deferredFollowupId: currentRuntimeState?.deferredFollowupId,
         });
         stage = "testing";
       }
@@ -340,6 +451,7 @@ async function processTicket(ticket: Ticket) {
             branch: worktree.branch,
             commitSha,
             pendingTestOutputPath: testOutputPath,
+            deferredFollowupId: getRuntimeTicketState(ticket.id)?.deferredFollowupId,
           });
           stage = "implementing";
           continue;
@@ -361,6 +473,7 @@ async function processTicket(ticket: Ticket) {
         baseSha: worktree.baseSha,
         branch: worktree.branch,
         commitSha,
+        deferredFollowupId: getRuntimeTicketState(ticket.id)?.deferredFollowupId,
       });
       commitSha = commitTicket(worktree.path, ticket.id, ticket.title);
       ticketLogger.info("Created ticket commit", { commitSha, branch: worktree.branch });
@@ -380,6 +493,7 @@ async function processTicket(ticket: Ticket) {
         baseSha: worktree.baseSha,
         branch: worktree.branch,
         commitSha,
+        deferredFollowupId: getRuntimeTicketState(ticket.id)?.deferredFollowupId,
       });
       removeTicketWorktree(worktree.path);
       deleteTicketBranch(worktree.branch);
@@ -394,6 +508,7 @@ async function processTicket(ticket: Ticket) {
         baseSha: worktree.baseSha,
         branch: worktree.branch,
         commitSha,
+        deferredFollowupId: getRuntimeTicketState(ticket.id)?.deferredFollowupId,
       });
       ticketLogger.info("Ticket completed successfully", {
         branch: worktree.branch,
@@ -460,6 +575,7 @@ async function processTicket(ticket: Ticket) {
       pendingReviewSummary: latestState?.pendingReviewSummary,
       pendingReviewIssues: latestState?.pendingReviewIssues,
       pendingTestOutputPath: latestState?.pendingTestOutputPath,
+      deferredFollowupId: latestState?.deferredFollowupId,
     });
     ticketLogger.warn("Ticket failed at a resumable step; worktree preserved for automatic retry", {
       branch: worktree.branch,
@@ -482,13 +598,33 @@ function formatReviewIssues(review: ReviewResult) {
   return review.issues.join("; ");
 }
 
+let worker: Worker | null = null;
+
 void reconcileRuntimeState().catch((error) => {
   logger.error("Autodev worker failed to reconcile runtime state", { error });
 });
 
-new Worker(
+async function pauseWorkerForGracefulStop(reason: string) {
+  if (!worker) {
+    return;
+  }
+
+  logger.warn("Pausing autodev worker for graceful stop", { reason });
+  await worker.pause(true);
+}
+
+if (shouldStopAfterCurrentTicket()) {
+  logger.warn("Autodev worker starting in paused mode because stop-after-current-ticket is requested");
+}
+
+worker = new Worker(
   PIPELINE.queueName,
   async (job) => {
+    if (shouldStopAfterCurrentTicket()) {
+      await pauseWorkerForGracefulStop("stop requested before starting next ticket");
+      return;
+    }
+
     if (job.name !== "process-ticket") {
       throw new Error(`Unexpected job name: ${job.name}`);
     }
@@ -497,6 +633,21 @@ new Worker(
 
     if (!ticket) {
       throw new Error(`Unknown ticket ${String(job.data.ticketId)}`);
+    }
+
+    const runtime = readRuntimeState();
+    const currentRuntimeStatus = runtime.tickets[ticket.id]?.status ?? ticket.status;
+    const otherInProgressTickets = Object.entries(runtime.tickets)
+      .filter(([ticketId, state]) => ticketId !== ticket.id && state.status === "in_progress")
+      .map(([ticketId]) => ticketId);
+
+    if (currentRuntimeStatus === "todo" && otherInProgressTickets.length > 0) {
+      logger.warn("Skipping lower-priority ticket because another ticket must resume first", {
+        ticketId: ticket.id,
+        blockedBy: otherInProgressTickets,
+      });
+      await job.remove();
+      return;
     }
 
     logger.info("Worker picked up ticket job", {
@@ -508,7 +659,11 @@ new Worker(
     try {
       await processTicket(ticket);
     } finally {
-      await enqueueRunnableTickets();
+      if (shouldStopAfterCurrentTicket()) {
+        await pauseWorkerForGracefulStop(`current ticket ${ticket.id} finished`);
+      } else {
+        await enqueueRunnableTickets();
+      }
     }
   },
   {
@@ -516,3 +671,7 @@ new Worker(
     concurrency: PIPELINE.workerConcurrency,
   },
 );
+
+if (shouldStopAfterCurrentTicket()) {
+  void pauseWorkerForGracefulStop("startup stop request");
+}

@@ -28,6 +28,7 @@ export const PIPELINE = {
   testTimeoutMs: parsePositiveMs(process.env.AUTODEV_TEST_TIMEOUT_MS, 15 * 60 * 1000),
   agentHeartbeatMs: parsePositiveMs(process.env.AUTODEV_AGENT_HEARTBEAT_MS, 30 * 1000),
   activeJobStaleMs: parsePositiveMs(process.env.AUTODEV_ACTIVE_JOB_STALE_MS, 2 * 60 * 1000),
+  maxReviewDriftRounds: parsePositiveInt(process.env.AUTODEV_MAX_REVIEW_DRIFT_ROUNDS, 2),
 };
 
 if (PIPELINE.workerConcurrency !== 1) {

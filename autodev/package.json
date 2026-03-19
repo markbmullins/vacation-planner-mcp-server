@@ -9,7 +9,9 @@
     "start": "node scripts/start.mjs",
     "stop": "pm2 delete autodev-opencode autodev-workers autodev-controller",
     "status": "tsx scripts/status.ts",
-    "reset-ticket": "tsx scripts/reset-ticket.ts"
+    "reset-ticket": "tsx scripts/reset-ticket.ts",
+    "stop-after-current": "tsx scripts/stop-after-current.ts",
+    "resume": "tsx scripts/resume.ts"
   },
   "dependencies": {
     "bullmq": "^5",

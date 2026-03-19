@@ -10,6 +10,10 @@ Focus on:
 
 Analyze the git diff for the current worktree before deciding.
 
+Only block on issues that are clearly required by the ticket acceptance criteria, architecture docs, correctness, security, or tests needed to verify the ticket. Do not introduce new scope or speculative improvements just because they would be nice to have.
+
+If the remaining concerns are minor polish, optional follow-up work, or improvements outside the ticket scope, approve the ticket and mention them briefly in the summary instead of using `changes_required`.
+
 Return JSON wrapped exactly in these markers:
 
 AUTODEV_REVIEW_JSON_START

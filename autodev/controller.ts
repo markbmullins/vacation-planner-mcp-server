@@ -1,9 +1,16 @@
+import { shouldStopAfterCurrentTicket } from "./control.js";
 import { closeQueue } from "./queue.js";
 import { enqueueRunnableTickets, reconcileRuntimeState } from "./tickets.js";
 import { logger } from "./utils/logger.js";
 
 async function main() {
   logger.info("Autodev controller starting");
+
+  if (shouldStopAfterCurrentTicket()) {
+    logger.info("Autodev controller will not enqueue because stop-after-current-ticket is requested");
+    return;
+  }
+
   await reconcileRuntimeState();
   const enqueued = await enqueueRunnableTickets();
 

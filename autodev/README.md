@@ -48,6 +48,18 @@ pm2 restart autodev-controller autodev-workers
 
 ## Stop
 
+Request a graceful stop after the current active ticket finishes:
+
+```bash
+npm run stop-after-current
+```
+
+Clear the graceful stop flag so autodev can continue scheduling work:
+
+```bash
+npm run resume
+```
+
 Stop both processes from the repository root:
 
 ```bash
@@ -154,7 +166,9 @@ pm2 save
 
 - Run PM2 commands from `autodev/` when using `ecosystem.config.cjs` directly.
 - The controller is one-shot and may stop after enqueueing runnable tickets; that is expected.
-- `npm run status` is the fastest way to see what autodev believes is running, blocked, done, or still todo.
+- `npm run status` is the authoritative reconciled view across PM2, BullMQ, runtime state, worktrees, and run artifacts.
+- `npm run stop-after-current` tells autodev to finish the current ticket, then pause without starting another one.
+- `npm run resume` clears that pause flag; restart workers/controller afterward if you want processing to continue.
 - Each in-progress ticket now shows its current stage, attempt number, branch, and run directory in runtime state.
 - Use `pm2 logs autodev-controller` to confirm enqueue activity and failures.
 - Use `pm2 logs autodev-workers` to watch ticket execution, review/test flow, and estimated AI token usage.

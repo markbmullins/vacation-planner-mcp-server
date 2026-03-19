@@ -23,6 +23,7 @@ export interface RuntimeTicketState {
   pendingReviewSummary?: string;
   pendingReviewIssues?: string[];
   pendingTestOutputPath?: string;
+  deferredFollowupId?: string;
 }
 
 export interface RuntimeState {
