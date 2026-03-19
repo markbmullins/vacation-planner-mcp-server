@@ -12,7 +12,17 @@
  * Domain types live in @dive-planner/domain.
  */
 
-import { ConfigError, loadConfig, loadDotenv, redactConfig, createHealthServer } from "@dive-planner/shared";
+import {
+  ConfigError,
+  loadConfig,
+  loadDotenv,
+  redactConfig,
+  createHealthServer,
+  createLogger,
+  installGlobalErrorHandlers,
+  generateCorrelationId,
+  runWithContext,
+} from "@dive-planner/shared";
 
 // Populate process.env from the repo root .env file before any other module
 // reads environment variables.  Variables already present (e.g. injected by CI
@@ -26,15 +36,36 @@ try {
   config = loadConfig();
 } catch (err: unknown) {
   if (err instanceof ConfigError) {
-    console.error("[mcp-server] Startup aborted: configuration error");
-    console.error(err.message);
+    process.stderr.write("[mcp-server] Startup aborted: configuration error\n");
+    process.stderr.write(err.message + "\n");
     process.exit(1);
   }
   throw err;
 }
 
-console.log("[mcp-server] Dive Vacation Planner MCP Server starting...");
-console.log("[mcp-server] Configuration loaded", JSON.stringify(redactConfig(config)));
+// ---------------------------------------------------------------------------
+// Structured logger
+//
+// Created immediately after config load so all subsequent startup steps
+// use the configured log level and runtime label.
+// The logger automatically injects correlation IDs from the async context
+// (see @dive-planner/shared logging/context.ts) into every log entry.
+// ---------------------------------------------------------------------------
+
+const log = createLogger(config.server.logLevel, { runtime: "mcp-server" });
+
+// ---------------------------------------------------------------------------
+// Global unhandled error handlers
+//
+// Installed before any async work begins.  Any uncaught exception or
+// unhandled Promise rejection produces a structured JSON error entry on
+// stderr and exits the process with code 1.
+// ---------------------------------------------------------------------------
+
+installGlobalErrorHandlers({ logger: log, runtime: "mcp-server" });
+
+log.info("Dive Vacation Planner MCP Server starting");
+log.info("Configuration loaded", redactConfig(config) as Record<string, unknown>);
 
 // ---------------------------------------------------------------------------
 // Health server
@@ -69,27 +100,39 @@ try {
     },
   });
 } catch (err: unknown) {
-  console.error(
-    "[mcp-server] Startup aborted: health server failed to bind port",
-    config.server.healthPort,
-  );
-  console.error(err instanceof Error ? err.message : String(err));
+  log.error("Startup aborted: health server failed to bind port", {
+    port: config.server.healthPort,
+    error: err instanceof Error ? err.message : String(err),
+  });
   process.exit(1);
 }
 
 // TODO (E2-T6): Register FastMCP adapter and tool handlers
+//
+// Each MCP tool handler must wrap its execution in runWithContext so that all
+// downstream log calls (services, repositories, adapters) automatically carry
+// the per-request correlation ID:
+//
+//   server.addTool("searchDiveSites", async (params) => {
+//     return runWithContext(
+//       { correlationId: generateCorrelationId(), contextType: "request", meta: { tool: "searchDiveSites" } },
+//       () => DiveDiscoveryService.searchSites(params),
+//     );
+//   });
 
 // ---------------------------------------------------------------------------
 // Graceful shutdown
 // ---------------------------------------------------------------------------
 
 async function shutdown(signal: string): Promise<void> {
-  console.log(`[mcp-server] Received ${signal}, shutting down gracefully`);
+  log.info(`Received ${signal}, shutting down gracefully`);
   try {
     await healthServer.close();
-    console.log("[mcp-server] Health server stopped");
+    log.info("Health server stopped");
   } catch (err) {
-    console.error("[mcp-server] Error stopping health server:", err);
+    log.error("Error stopping health server", {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
   process.exit(0);
 }
@@ -97,6 +140,24 @@ async function shutdown(signal: string): Promise<void> {
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 process.on("SIGINT", () => void shutdown("SIGINT"));
 
-console.log("[mcp-server] MCP Server ready (placeholder — tools not yet registered)");
+// ---------------------------------------------------------------------------
+// Startup correlation context
+//
+// Wrap the ready announcement in a startup context so that any log calls
+// emitted after startup (e.g. from health-check processing or future tool
+// handler wiring) carry a stable correlation ID rather than appearing as
+// untracked log lines.
+// ---------------------------------------------------------------------------
+
+runWithContext(
+  {
+    correlationId: generateCorrelationId(),
+    contextType: "request",
+    meta: { phase: "startup" },
+  },
+  () => {
+    log.info("MCP Server ready (placeholder — tools not yet registered)");
+  },
+);
 
 export { config };

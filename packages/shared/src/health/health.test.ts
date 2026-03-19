@@ -22,6 +22,8 @@ import { createHealthServer } from "./server.js";
 import type { HealthServerOptions } from "./server.js";
 import type { DependencyCheckResult } from "./types.js";
 import { loadConfig, ConfigError } from "../config/index.js";
+import { createLogger } from "../logging/logger.js";
+import type { LogEntry } from "../logging/logger.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -428,6 +430,141 @@ describe("health port config — WORKER_HEALTH_PORT", () => {
         assert.match(err.message, /WORKER_HEALTH_PORT/);
         return true;
       },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Structured logger integration — startup log shape regression
+// ---------------------------------------------------------------------------
+
+describe("createHealthServer — structured startup logging", () => {
+  /**
+   * Captures a single process.stdout.write call synchronously.
+   * Returns the captured lines as parsed JSON objects.
+   */
+  function captureStdout(fn: () => void): LogEntry[] {
+    const lines: string[] = [];
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: Uint8Array | string): boolean => {
+      lines.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as never;
+    try {
+      fn();
+    } finally {
+      process.stdout.write = original;
+    }
+    return lines
+      .flatMap((l) => l.split("\n"))
+      .filter((l) => l.trim() !== "")
+      .map((l) => JSON.parse(l) as LogEntry);
+  }
+
+  it("emits a structured JSON startup log entry via the provided logger", async () => {
+    const capturedEntries: LogEntry[] = [];
+
+    // Create a logger and intercept its output synchronously.
+    // We start the server, capture output during the startup promise, then close.
+    const log = createLogger("info", { runtime: "test-runtime" });
+
+    // Allocate an ephemeral port.
+    const port = await new Promise<number>((resolve, reject) => {
+      const probe = http.createServer();
+      probe.listen(0, () => {
+        const addr = probe.address();
+        const p = addr && typeof addr === "object" ? addr.port : 0;
+        probe.close((err) => (err ? reject(err) : resolve(p)));
+      });
+      probe.on("error", reject);
+    });
+
+    // Wrap createHealthServer in stdout capture so we intercept the logger's write.
+    let handle: Awaited<ReturnType<typeof createHealthServer>> | undefined;
+    const entries = await new Promise<LogEntry[]>((resolve, reject) => {
+      const captured: LogEntry[] = [];
+      const original = process.stdout.write.bind(process.stdout);
+      process.stdout.write = ((chunk: Uint8Array | string): boolean => {
+        const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+        text
+          .split("\n")
+          .filter((l) => l.trim() !== "")
+          .forEach((l) => {
+            try { captured.push(JSON.parse(l) as LogEntry); } catch { /* ignore non-JSON */ }
+          });
+        return true;
+      }) as never;
+
+      createHealthServer({ runtime: "test-runtime", port, probeOptions: { postgres: {}, redis: {} }, logger: log })
+        .then((h) => {
+          process.stdout.write = original;
+          handle = h;
+          resolve(captured);
+        })
+        .catch((err) => {
+          process.stdout.write = original;
+          reject(err);
+        });
+    });
+
+    after(() => handle?.close());
+
+    assert.ok(entries.length >= 1, "expected at least one structured log entry on startup");
+    const startupEntry = entries.find((e) => e.message === "health server listening");
+    assert.ok(startupEntry !== undefined, "expected a 'health server listening' log entry");
+
+    // Verify required structured fields.
+    assert.strictEqual(startupEntry.level, "info");
+    assert.strictEqual(typeof startupEntry.timestamp, "string");
+    const d = new Date(startupEntry.timestamp);
+    assert.ok(!isNaN(d.getTime()), "timestamp should be a valid ISO string");
+
+    // Component and runtime context fields.
+    assert.strictEqual((startupEntry as Record<string, unknown>)["component"], "health");
+    assert.strictEqual((startupEntry as Record<string, unknown>)["runtime"], "test-runtime");
+    assert.strictEqual((startupEntry as Record<string, unknown>)["port"], port);
+  });
+
+  it("falls back to plain stdout when no logger is provided", async () => {
+    // Allocate an ephemeral port.
+    const port = await new Promise<number>((resolve, reject) => {
+      const probe = http.createServer();
+      probe.listen(0, () => {
+        const addr = probe.address();
+        const p = addr && typeof addr === "object" ? addr.port : 0;
+        probe.close((err) => (err ? reject(err) : resolve(p)));
+      });
+      probe.on("error", reject);
+    });
+
+    const plainLines: string[] = [];
+    let handle: Awaited<ReturnType<typeof createHealthServer>> | undefined;
+
+    const lines = await new Promise<string[]>((resolve, reject) => {
+      const original = process.stdout.write.bind(process.stdout);
+      process.stdout.write = ((chunk: Uint8Array | string): boolean => {
+        plainLines.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+        return true;
+      }) as never;
+
+      createHealthServer({ runtime: "fallback-runtime", port, probeOptions: { postgres: {}, redis: {} } })
+        .then((h) => {
+          process.stdout.write = original;
+          handle = h;
+          resolve(plainLines);
+        })
+        .catch((err) => {
+          process.stdout.write = original;
+          reject(err);
+        });
+    });
+
+    after(() => handle?.close());
+
+    const combined = lines.join("");
+    assert.ok(
+      combined.includes("[health]") && combined.includes("fallback-runtime"),
+      `expected plain-text fallback log, got: ${combined}`,
     );
   });
 });

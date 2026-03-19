@@ -26,6 +26,7 @@ import http from "node:http";
 import type { DependencyCheckResult, HealthStatus, LivenessResponse, ReadinessResponse } from "./types.js";
 import type { RunProbesOptions } from "./probes.js";
 import { runDependencyProbes } from "./probes.js";
+import type { Logger } from "../logging/logger.js";
 
 export interface HealthServerOptions {
   /** Logical name of this runtime process, included in responses */
@@ -40,6 +41,15 @@ export interface HealthServerOptions {
    * Useful for testing.
    */
   runProbes?: (opts: RunProbesOptions) => Promise<DependencyCheckResult[]>;
+  /**
+   * Optional structured logger.  When provided, startup messages are emitted
+   * via the logger instead of writing plain text to stdout.  This keeps all
+   * runtime log output in a consistent structured format.
+   *
+   * When omitted the server falls back to `process.stdout.write` so it
+   * remains usable before a logger is configured.
+   */
+  logger?: Logger;
 }
 
 export interface HealthServerHandle {
@@ -85,7 +95,7 @@ function jsonResponse(
  * rejection as a fatal startup error.
  */
 export function createHealthServer(options: HealthServerOptions): Promise<HealthServerHandle> {
-  const { runtime, port, probeOptions } = options;
+  const { runtime, port, probeOptions, logger } = options;
   const probe = options.runProbes ?? runDependencyProbes;
 
   return new Promise<HealthServerHandle>((resolve, reject) => {
@@ -145,9 +155,13 @@ export function createHealthServer(options: HealthServerOptions): Promise<Health
 
     // Resolve only after the port is successfully bound.
     server.once("listening", () => {
-      process.stdout.write(
-        `[health] ${runtime} health server listening on port ${port}\n`,
-      );
+      if (logger) {
+        logger.info("health server listening", { component: "health", runtime, port });
+      } else {
+        process.stdout.write(
+          `[health] ${runtime} health server listening on port ${port}\n`,
+        );
+      }
       resolve({
         close(): Promise<void> {
           return new Promise((res, rej) => {
