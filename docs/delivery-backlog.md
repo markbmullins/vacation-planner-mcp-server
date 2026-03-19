@@ -735,3 +735,27 @@ The practical MVP scope is:
 - Basic deployment and operational readiness from Epic 12
 
 Epics 8 and 13 are the primary post-MVP expansion path, though parts of Epic 8 may be pulled earlier if reusable retrieval becomes necessary for recommendation quality.
+
+## Deferred Autodev Follow-ups
+
+- **FUP-E1-T5-01 Deferred follow-up for E1-T5 Shared logging, request IDs, and error envelope**
+  - Objective: Address deferred review findings discovered while implementing `E1-T5`.
+  - Key implementation notes: Keep scope limited to the issues below. Original ticket: `E1-T5`. Suggested slug: `shared-logging-request-ids-and-error-envelope`.
+  - Deferred review findings:
+    - BLOCKER: Health server logging is not actually wired into either runtime - `packages/shared/src/health/server.ts:158` now supports structured logging via an optional `logger`, but neither `apps/mcp-server/src/index.ts` nor `apps/worker/src/index.ts:93` passes `logger: log` when starting the health server. In production this still writes plain-text `[health] ...` lines to stdout, so logging is not consistently using the shared structured logger across the server/worker processes.
+    - MAJOR: Missing integration coverage for server/worker logging wiring - The new tests only verify `createHealthServer` in isolation. There is no test covering the actual `apps/mcp-server` and `apps/worker` startup wiring, so the current regression slipped through even though the ticket's acceptance depends on the runtime using the shared logging/error setup. Add an entrypoint-level test or equivalent verification that the runtimes pass their logger into the health server and emit structured startup logs.
+  - Dependencies: Schedule after the original ticket's parent flow is complete.
+  - Acceptance criteria:
+    - Deferred review findings are addressed without expanding scope.
+    - Existing behavior from the original ticket remains intact.
+
+- **FUP-E1-T5-02 Deferred follow-up for E1-T5 Shared logging, request IDs, and error envelope**
+  - Objective: Address deferred review findings discovered while implementing `E1-T5`.
+  - Key implementation notes: Keep scope limited to the issues below. Original ticket: `E1-T5`. Suggested slug: `shared-logging-request-ids-and-error-envelope`.
+  - Deferred review findings:
+    - MAJOR: Untitled issue - The ticket acceptance criteria require every MCP request log to carry a correlation ID, but the MCP side only has a TODO/comment showing how future tool handlers should call `runWithContext(...)`. There is no implemented request-scoped helper or actual request wiring yet, so the request-ID portion of the ticket is still incomplete.
+    - MAJOR: Untitled issue - `wrapJobProcessor` is defined in the worker process entrypoint, and the comment explicitly suggests importing it from `../index.js`. Importing that file also executes dotenv/config loading, installs signal/error handlers, and starts the health server. That makes the shared job-context helper unsafe to reuse from real BullMQ processor modules and violates the intended thin-entrypoint/shared-logic architecture. The wrapper should live in a side-effect-free shared/module file.
+  - Dependencies: Schedule after the original ticket's parent flow is complete.
+  - Acceptance criteria:
+    - Deferred review findings are addressed without expanding scope.
+    - Existing behavior from the original ticket remains intact.
