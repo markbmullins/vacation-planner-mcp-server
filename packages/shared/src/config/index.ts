@@ -320,11 +320,15 @@ export interface RedisConfig {
 
 export interface ServerConfig {
   port: number;
+  /** HTTP port for the health server (liveness + readiness endpoints) */
+  healthPort: number;
   logLevel: LogLevel;
 }
 
 export interface WorkerConfig {
   concurrency: number;
+  /** HTTP port for the worker health server (liveness + readiness endpoints) */
+  healthPort: number;
 }
 
 /**
@@ -588,11 +592,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   const server: ServerConfig = {
     port: safeOptionalInt("MCP_SERVER_PORT", 3000),
+    healthPort: safeOptionalInt("MCP_HEALTH_PORT", 9000),
     logLevel: safeLogLevel("LOG_LEVEL", "info"),
   };
 
   const worker: WorkerConfig = {
     concurrency: safeOptionalInt("WORKER_CONCURRENCY", 2),
+    healthPort: safeOptionalInt("WORKER_HEALTH_PORT", 9001),
   };
 
   const integrations: IntegrationConfig = {

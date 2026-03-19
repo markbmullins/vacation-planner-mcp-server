@@ -12,7 +12,7 @@
  * Domain types live in @dive-planner/domain.
  */
 
-import { ConfigError, loadConfig, loadDotenv, redactConfig } from "@dive-planner/shared";
+import { ConfigError, loadConfig, loadDotenv, redactConfig, createHealthServer } from "@dive-planner/shared";
 
 // Populate process.env from the repo root .env file before any other module
 // reads environment variables.  Variables already present (e.g. injected by CI
@@ -36,18 +36,66 @@ try {
 console.log("[mcp-server] Dive Vacation Planner MCP Server starting...");
 console.log("[mcp-server] Configuration loaded", JSON.stringify(redactConfig(config)));
 
+// ---------------------------------------------------------------------------
+// Health server
+//
+// Starts a lightweight HTTP server on config.server.healthPort that exposes:
+//   GET /health/live  — shallow liveness probe (no external deps)
+//   GET /health/ready — deep readiness probe (Postgres + Redis connectivity)
+//
+// The health server is separate from the MCP protocol port so that
+// load-balancers and orchestrators can probe it without interfering with
+// the stdio/SSE MCP transport.
+//
+// createHealthServer returns a Promise that resolves only once the port is
+// successfully bound.  If binding fails (e.g. EADDRINUSE), the process exits
+// immediately rather than continuing without health endpoints.
+// ---------------------------------------------------------------------------
+
+let healthServer: Awaited<ReturnType<typeof createHealthServer>>;
+try {
+  healthServer = await createHealthServer({
+    runtime: "mcp-server",
+    port: config.server.healthPort,
+    probeOptions: {
+      postgres: {
+        url: config.database.url,
+      },
+      redis: {
+        url: config.redis.url,
+        host: config.redis.host,
+        port: config.redis.port,
+      },
+    },
+  });
+} catch (err: unknown) {
+  console.error(
+    "[mcp-server] Startup aborted: health server failed to bind port",
+    config.server.healthPort,
+  );
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
+
 // TODO (E2-T6): Register FastMCP adapter and tool handlers
-// TODO (E1-T4): Wire health endpoints
 
-process.on("SIGTERM", () => {
-  console.log("[mcp-server] Received SIGTERM, shutting down gracefully");
-  process.exit(0);
-});
+// ---------------------------------------------------------------------------
+// Graceful shutdown
+// ---------------------------------------------------------------------------
 
-process.on("SIGINT", () => {
-  console.log("[mcp-server] Received SIGINT, shutting down gracefully");
+async function shutdown(signal: string): Promise<void> {
+  console.log(`[mcp-server] Received ${signal}, shutting down gracefully`);
+  try {
+    await healthServer.close();
+    console.log("[mcp-server] Health server stopped");
+  } catch (err) {
+    console.error("[mcp-server] Error stopping health server:", err);
+  }
   process.exit(0);
-});
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
 
 console.log("[mcp-server] MCP Server ready (placeholder — tools not yet registered)");
 
