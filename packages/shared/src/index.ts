@@ -9,3 +9,4 @@
 export * from "./types/common.js";
 export * from "./types/errors.js";
 export * from "./types/result.js";
+export * from "./config/index.js";

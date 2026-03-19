@@ -16,7 +16,7 @@
     "build": "npm run build:packages && npm run build:apps && npm --prefix autodev run build",
     "build:packages": "npm run build --workspace=packages/shared --workspace=packages/domain --workspace=packages/data-access --workspace=packages/adapters --workspace=packages/services",
     "build:apps": "npm run build --workspace=apps/mcp-server --workspace=apps/worker",
-    "test": "npm run build",
+    "test": "npm run build && npm test --workspace=packages/shared",
     "infra:up": "bash infra/scripts/dev-up.sh",
     "infra:down": "bash infra/scripts/dev-down.sh",
     "infra:reset": "bash infra/scripts/dev-down.sh --reset"
